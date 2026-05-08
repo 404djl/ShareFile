@@ -1,0 +1,682 @@
+# Sec-OTA-RTOS 项目说明（Codex 协作版）
+
+下面是一份可直接交给其他 Codex / GPT-5.5 继续工作的 `Markdown` 文档草稿，内容已经按 `STM32L552 + TrustZone-M + FreeRTOS + Secure OTA` 的方向整理好了，重点是：
+
+- 目标明确
+- 架构严谨
+- 术语统一
+- 方便后续继续生成代码、文档和测试计划
+
+---
+
+```md
+# 基于 STM32L552 + TrustZone-M + FreeRTOS 的安全 OTA 升级系统
+
+## 1. 项目定位
+
+本项目面向研究生秋招，目标是设计并实现一个具有真实工业价值的嵌入式系统项目，而不是普通的 RTOS Demo。
+
+项目主题为：
+
+**基于 STM32L552 Cortex-M33 TrustZone-M 与 FreeRTOS 的安全 OTA 升级系统**
+
+该项目重点体现以下能力：
+
+- 嵌入式系统架构设计
+- RTOS 多任务设计与任务协同
+- TrustZone-M 安全隔离
+- Secure Boot / Secure OTA 机制
+- A/B 双槽升级与防回滚
+- 首启确认与自动回滚
+- 工程化设计与可面试讲述能力
+
+---
+
+## 2. 项目目标
+
+本项目希望在 `STM32L552` 平台上实现一套安全 OTA 升级框架，要求满足以下目标：
+
+### 2.1 安全性
+- 未通过签名认证的固件不能被激活
+- Non-Secure 侧不能直接决定镜像是否生效
+- 公钥、版本基线和升级提交逻辑由 Secure 侧控制
+- 支持非法升级拦截、防回滚和 SecureFault 演示
+
+### 2.2 可靠性
+- 支持 A/B 双槽升级
+- 升级过程中掉电不导致设备变砖
+- 新固件首次启动失败时能够自动回滚
+- 支持升级状态持久化与恢复
+
+### 2.3 RTOS 工程性
+- Non-Secure 侧运行 FreeRTOS
+- OTA 期间业务任务仍可继续运行
+- 使用任务、队列、事件组、信号量等机制组织升级流程
+- 可展示实时系统中 OTA 与业务并存的设计能力
+
+---
+
+## 3. 开发平台
+
+### 3.1 硬件平台
+- 开发板：`NUCLEO-L552ZE-Q`
+- MCU：`STM32L552ZE-Q`
+- 内核：`Arm Cortex-M33`
+- 特性：`TrustZone-M`
+
+### 3.2 软件平台
+- IDE：`STM32CubeIDE`
+- HAL / BSP：`STM32CubeL5`
+- RTOS：`FreeRTOS`
+- 密码库：`mbedTLS`（精简配置）
+- 主机侧工具：`Python`
+
+### 3.3 OTA 通信方式
+第一阶段优先使用：
+- `UART`
+
+后续可扩展：
+- `ESP8266 Wi-Fi`
+- `BLE`
+- `上位机串口工具 / Python 脚本`
+
+---
+
+## 4. 系统总体架构
+
+系统采用 `Secure World / Non-Secure World` 双世界架构。
+
+### 4.1 Secure World
+Secure 侧负责系统信任根与安全决策，包含：
+
+- Secure Bootloader
+- 镜像验签引擎
+- 版本基线与防回滚
+- Boot Metadata 管理
+- NSC 安全接口
+- SecureFault Handler
+
+Secure 侧拥有以下权限：
+- 管理公钥
+- 校验候选镜像
+- 判断是否允许升级
+- 决定镜像激活
+- 处理升级回滚
+
+### 4.2 Non-Secure World
+Non-Secure 侧运行 `FreeRTOS`，负责：
+
+- 接收 OTA 固件数据
+- 分片组包
+- 写入候选槽位
+- 维持业务逻辑运行
+- 日志输出与状态展示
+- 新镜像首启后的健康确认
+
+### 4.3 架构原则
+- NS 侧可以“下载和搬运”镜像
+- NS 侧不能决定镜像是否激活
+- Secure 侧负责最终验签与升级授权
+- Bootloader 负责试运行和回滚判断
+
+---
+
+## 5. 核心功能清单
+
+### 5.1 安全功能
+- TrustZone Secure / Non-Secure 隔离
+- Secure API 通过 NSC veneer 暴露
+- ECDSA-P256 固件签名与验签
+- SHA-256 镜像摘要校验
+- 防回滚版本检查
+- SecureFault 演示
+
+### 5.2 升级功能
+- A/B 双槽镜像布局
+- Slot B 下载暂存
+- 验签通过后待激活
+- 软复位切换到候选镜像
+- 首启成功确认
+- 首启失败自动回滚
+
+### 5.3 RTOS 功能
+- 通信接收任务
+- OTA Agent 任务
+- Flash 写任务
+- 业务任务
+- 健康监控任务
+- 日志任务
+
+---
+
+## 6. 工程划分
+
+项目划分为三个独立构建单元：
+
+1. `Secure Bootloader`
+2. `Secure Runtime`
+3. `Non-Secure FreeRTOS App`
+
+此外还包括：
+- `common` 共享头文件与公共定义
+- `tools` 主机侧打包、签名、发送工具
+- `docs` 文档与测试记录
+
+---
+
+## 7. 推荐工程目录结构
+
+```text
+sec-ota-rtos/
+├─ docs/
+│  ├─ architecture/
+│  ├─ bringup/
+│  └─ resume/
+├─ tools/
+│  ├─ sign_tool/
+│  └─ host_sender/
+├─ common/
+│  ├─ inc/
+│  └─ src/
+├─ secure_boot/
+│  ├─ Core/
+│  ├─ Drivers/
+│  ├─ linker/
+│  └─ project/
+├─ secure_runtime/
+│  ├─ Core/
+│  ├─ Crypto/
+│  ├─ linker/
+│  └─ project/
+├─ nonsecure_app/
+│  ├─ Core/
+│  ├─ Middleware/
+│  ├─ Drivers/
+│  ├─ linker/
+│  └─ project/
+├─ tests/
+└─ README.md
+```
+
+---
+
+## 8. 各模块职责
+
+### 8.1 `common/`
+共享定义，供 Bootloader、Secure Runtime 和 NS App 共用。
+
+建议包含：
+- `flash_layout.h`
+- `firmware_header.h`
+- `boot_metadata.h`
+- `ota_status.h`
+- `error_codes.h`
+- `version_info.h`
+
+### 8.2 `secure_boot/`
+负责最小化的安全启动逻辑：
+
+- 上电读取 Boot Metadata
+- 判断当前应启动 Slot A 还是 Slot B
+- 处理 `trial boot`
+- 判断是否需要回滚
+- 跳转到目标镜像
+
+### 8.3 `secure_runtime/`
+负责安全控制逻辑：
+
+- 校验镜像头合法性
+- 计算 SHA-256
+- 执行 ECDSA-P256 验签
+- 检查防回滚版本策略
+- 更新 Boot Metadata
+- 提供 NSC 安全接口
+- 管理密钥、公钥、版本基线
+
+### 8.4 `nonsecure_app/`
+运行 FreeRTOS，负责：
+
+- 收包
+- 分片管理
+- 写 Slot B
+- 调用 Secure API 发起校验
+- 正常业务任务运行
+- 首启确认和日志输出
+
+### 8.5 `tools/sign_tool/`
+主机侧工具负责：
+- 读取 `.bin`
+- 生成固件包头
+- 计算 hash / crc
+- 使用私钥签名
+- 打包输出 `.ota`
+
+---
+
+## 9. Flash 分区方案
+
+以下为建议布局，默认按 STM32L552 项目方案规划：
+
+### 9.1 分区目标
+- Secure 区固定
+- A/B 双槽等大
+- Metadata 单独存放
+- 留出数据区与扩展空间
+
+### 9.2 建议布局
+
+```c
+#define SECURE_BOOT_BASE        0x0C000000U
+#define SECURE_BOOT_SIZE        (32U * 1024U)
+
+#define SECURE_RUNTIME_BASE     0x0C008000U
+#define SECURE_RUNTIME_SIZE     (96U * 1024U)
+
+#define SECURE_META_BASE        0x0C020000U
+#define SECURE_META_SIZE        (8U * 1024U)
+
+#define NS_SLOT_A_BASE          0x08040000U
+#define NS_SLOT_A_SIZE          (128U * 1024U)
+
+#define NS_SLOT_B_BASE          0x08060000U
+#define NS_SLOT_B_SIZE          (128U * 1024U)
+
+#define NS_DATA_BASE            0x08080000U
+#define NS_DATA_SIZE            (64U * 1024U)
+```
+
+### 9.3 分区职责
+- `Secure Bootloader`：上电启动与回滚控制
+- `Secure Runtime`：安全服务、验签、公钥与版本管理
+- `Secure Meta`：Boot Metadata、公钥、版本基线
+- `NS Slot A`：当前稳定运行镜像
+- `NS Slot B`：OTA 候选镜像
+- `NS Data`：日志、KV、升级进度、预留
+
+---
+
+## 10. OTA 包格式
+
+### 10.1 设计原则
+- Header 固定长度，便于解析与扩展
+- CRC32 只做快速检测
+- 安全认证以哈希和签名为准
+- 签名格式必须统一
+
+### 10.2 固件头建议定义
+
+```c
+typedef struct
+{
+    uint32_t magic;
+    uint32_t header_version;
+    uint32_t firmware_version;
+    uint32_t image_size;
+    uint32_t image_crc32;
+    uint32_t hash_type;
+    uint32_t sign_type;
+    uint32_t reserved0;
+    uint8_t  image_hash[32];
+    uint8_t  signature_raw_rs[64];
+    uint8_t  reserved[128];
+} FirmwareHeader_t;
+```
+
+### 10.3 关键约束
+- `signature_raw_rs[64]` 采用 `raw(r||s)` 格式
+- 不使用可变长 DER 签名直接落盘
+- `image_crc32` 仅用于快速传输错误检测
+- 真实性由 `SHA-256 + ECDSA-P256` 保证
+
+---
+
+## 11. Boot Metadata 设计
+
+Boot Metadata 是升级状态机的核心持久化结构。
+
+### 11.1 推荐结构
+
+```c
+#define BOOT_META_MAGIC 0x424F4F54U
+
+typedef struct
+{
+    uint32_t magic;
+    uint32_t format_version;
+    uint32_t state;
+    uint32_t active_slot;
+    uint32_t pending_slot;
+    uint32_t confirmed_version;
+    uint32_t candidate_version;
+    uint32_t trial_boot_count;
+    uint32_t last_reset_reason;
+    uint32_t image_size;
+    uint32_t image_crc32;
+    uint32_t metadata_crc32;
+} BootMetadata_t;
+```
+
+### 11.2 字段说明
+- `active_slot`：当前稳定运行槽
+- `pending_slot`：待试运行槽
+- `confirmed_version`：最后确认成功的版本
+- `candidate_version`：候选镜像版本
+- `trial_boot_count`：试运行次数
+- `last_reset_reason`：最近一次复位原因
+- `metadata_crc32`：结构体校验
+
+---
+
+## 12. OTA 状态机
+
+### 12.1 状态定义
+
+```c
+typedef enum
+{
+    BOOT_STATE_IDLE = 0,
+    BOOT_STATE_DOWNLOADING,
+    BOOT_STATE_DOWNLOADED,
+    BOOT_STATE_VERIFIED,
+    BOOT_STATE_PENDING_ACTIVATE,
+    BOOT_STATE_TRIAL_BOOT,
+    BOOT_STATE_CONFIRMED,
+    BOOT_STATE_ROLLBACK
+} BootState_t;
+```
+
+### 12.2 状态含义
+- `IDLE`：无升级任务
+- `DOWNLOADING`：正在下载并写入 Slot B
+- `DOWNLOADED`：候选镜像写入完成
+- `VERIFIED`：签名和版本检查已通过
+- `PENDING_ACTIVATE`：允许切换，等待重启
+- `TRIAL_BOOT`：候选镜像试运行
+- `CONFIRMED`：新镜像已确认成功
+- `ROLLBACK`：试运行失败，回退旧版本
+
+### 12.3 状态迁移逻辑
+1. `IDLE -> DOWNLOADING`
+2. `DOWNLOADING -> DOWNLOADED`
+3. `DOWNLOADED -> VERIFIED`
+4. `VERIFIED -> PENDING_ACTIVATE`
+5. `PENDING_ACTIVATE -> TRIAL_BOOT`
+6. `TRIAL_BOOT -> CONFIRMED`
+7. `TRIAL_BOOT -> ROLLBACK`
+8. `ROLLBACK -> Slot A confirmed`
+
+### 12.4 重要原则
+- 验签通过不等于升级成功
+- 版本号只在 `CONFIRMED` 后提交
+- 首启未确认视为升级失败
+- 回滚判断由 Bootloader 主导
+
+---
+
+## 13. 完整 OTA 流程
+
+### 13.1 下载阶段
+- `CommRxTask` 通过 UART 接收固件分片
+- `OtaAgentTask` 负责组包与顺序检查
+- `FlashWriterTask` 将镜像写入 `Slot B`
+
+### 13.2 校验阶段
+- NS 调用 `SECURE_VerifySlotB()`
+- Secure 侧完成：
+  - header 合法性检查
+  - CRC32 快速检查
+  - SHA-256 计算
+  - ECDSA-P256 验签
+  - 版本防回滚检查
+
+### 13.3 激活阶段
+- 校验成功后，Secure 侧将 Metadata 状态改为 `PENDING_ACTIVATE`
+- 系统软复位
+- Bootloader 检测状态并从 `Slot B` 启动
+
+### 13.4 首启确认阶段
+- 新固件进入 `TRIAL_BOOT`
+- `HealthMonitorTask` 在超时内完成健康检查
+- 若运行正常，则调用 `SECURE_ConfirmRunningImage()`
+- Secure 侧将镜像转正为 `CONFIRMED`
+
+### 13.5 回滚阶段
+以下情况触发回滚：
+- 首启期间 watchdog reset
+- 首启期间 hard fault
+- 首启确认超时
+- 健康检查失败
+
+Bootloader 在下次启动时：
+- 清理候选状态
+- 恢复 Slot A 为稳定镜像
+- 状态置为 `ROLLBACK`
+
+---
+
+## 14. Secure API 设计
+
+第一期建议仅暴露最小接口集。
+
+```c
+typedef enum
+{
+    OTA_OK = 0,
+    OTA_ERR_BAD_MAGIC,
+    OTA_ERR_BAD_SIZE,
+    OTA_ERR_BAD_CRC,
+    OTA_ERR_BAD_SIGNATURE,
+    OTA_ERR_ROLLBACK_BLOCKED,
+    OTA_ERR_BAD_STATE,
+    OTA_ERR_INTERNAL
+} OtaResult_t;
+
+OtaResult_t SECURE_VerifySlotB(void);
+OtaResult_t SECURE_RequestActivateSlotB(void);
+OtaResult_t SECURE_ConfirmRunningImage(void);
+uint32_t    SECURE_ReadBootState(void);
+```
+
+### 14.1 接口职责
+- `SECURE_VerifySlotB()`：仅校验，不激活
+- `SECURE_RequestActivateSlotB()`：写入待激活状态
+- `SECURE_ConfirmRunningImage()`：首启成功后确认镜像
+- `SECURE_ReadBootState()`：提供状态查询
+
+---
+
+## 15. FreeRTOS 任务划分
+
+### 15.1 任务列表
+
+| 任务名 | 优先级 | 职责 |
+|---|---:|---|
+| `CommRxTask` | 高 | UART / Wi-Fi 收包，写 ring buffer |
+| `OtaAgentTask` | 高 | 组包、状态推进、触发写槽与验签 |
+| `FlashWriterTask` | 中高 | 串行化执行 Flash 擦写 |
+| `AppTask` | 中 | 主业务逻辑 |
+| `HealthMonitorTask` | 中 | 看门狗、心跳、栈水位、首启确认 |
+| `LogTask` | 低 | 日志输出 |
+| `UiTask` 可选 | 低 | LED/OLED 状态显示 |
+
+### 15.2 同步机制
+- `QueueFirmwareChunk`：传递固件分片
+- `QueueFlashJob`：传递 Flash 写任务
+- `EventGroupOta`：同步 OTA 状态
+- `BinarySemaphoreDmaRx`：DMA 接收完成通知
+- `MutexUart`：保护日志串口
+
+### 15.3 设计要点
+- OTA 期间业务不必停止
+- Flash 写独立任务串行管理
+- 健康监控任务负责首启确认
+- 日志任务降低主流程耦合
+
+---
+
+## 16. 项目技术亮点
+
+### 16.1 面向面试的核心亮点
+- 基于 `Cortex-M33 TrustZone-M` 实现 Secure / Non-Secure 双世界隔离
+- 在 NS 侧基于 `FreeRTOS` 设计 OTA Agent、通信、健康监控与日志任务
+- Secure 侧实现 `SHA-256 + ECDSA-P256` 固件验签
+- 采用 `A/B 双槽 + 首启确认 + 自动回滚` 实现掉电安全升级
+- 通过 `Boot Metadata 状态机` 实现升级流程的可恢复与可观测
+
+### 16.2 相比普通 RTOS 项目的提升
+本项目不仅包含多任务调度，还覆盖了：
+- 安全启动
+- 安全升级
+- 异常恢复
+- 防回滚
+- 系统级状态机设计
+
+因此它比普通“串口收发 + 多任务打印”的 FreeRTOS 项目更接近工业实际。
+
+---
+
+## 17. 当前明确的技术约束
+
+### 17.1 已确认方案
+- 平台：`STM32L552`
+- RTOS：`FreeRTOS`
+- 升级方式：第一阶段 `UART OTA`
+- 安全机制：`TrustZone-M + Secure API + ECDSA-P256`
+- 升级机制：`A/B 双槽 + 首启确认 + 自动回滚`
+
+### 17.2 必须坚持的设计原则
+- NS 侧不得直接激活镜像
+- Secure 侧掌握验签与版本控制权
+- 固件签名格式必须统一为定长 `raw(r||s)`
+- 版本号提交时机必须在 `CONFIRMED` 之后
+- 状态切换依赖 Metadata 状态机，不使用模糊逻辑
+
+---
+
+## 18. 后续开发顺序建议
+
+建议开发顺序如下：
+
+1. 先完成 `common` 层头文件定义
+2. 完成 `Secure Bootloader` 最小启动和回滚流程
+3. 完成 `Secure Runtime` 的 header/CRC/version 框架
+4. 补充 `ECDSA` 验签能力
+5. 搭建 `Non-Secure FreeRTOS` 任务骨架
+6. 打通 UART 收包与 Slot B 写入
+7. 打通 Verify / Activate / Trial Boot / Confirm 流程
+8. 最后补充攻击演示、日志、简历文案与测试文档
+
+---
+
+## 19. 后续希望 Codex 继续完成的内容
+
+后续可以让 Codex 继续生成以下内容：
+
+### 19.1 代码层
+- `flash_layout.h`
+- `firmware_header.h`
+- `boot_metadata.h`
+- `ota_status.h`
+- Secure API `.h/.c`
+- Bootloader 状态机框架
+- FreeRTOS 任务框架
+- Python 打包签名工具
+
+### 19.2 文档层
+- Flash 分区说明
+- OTA 状态机说明
+- 测试计划
+- 威胁模型
+- 面试讲解稿
+- 简历项目描述
+
+### 19.3 测试层
+- 篡改包头测试
+- 签名错误测试
+- 版本回退测试
+- 首启超时测试
+- watchdog 回滚测试
+- SecureFault 演示
+
+---
+
+## 20. 对后续 Codex 的明确任务要求
+
+如果后续交给其他 Codex / GPT-5.5，请遵守以下要求：
+
+1. 不要擅自更换平台，默认平台固定为 `STM32L552`
+2. 不要把项目改成 Zephyr、Linux 或非 MCU 方案
+3. 不要把签名格式改成模糊不清的 DER 直存方案
+4. 默认保持三段式结构：
+   - `Secure Bootloader`
+   - `Secure Runtime`
+   - `Non-Secure FreeRTOS App`
+5. 优先生成可直接落地的 `.h/.c` 文件，而不是泛泛建议
+6. 所有后续代码和文档必须围绕：
+   - `TrustZone-M`
+   - `FreeRTOS`
+   - `Secure OTA`
+   - `A/B 双槽`
+   - `首启确认`
+   - `自动回滚`
+
+---
+
+## 21. 简历一句话表述
+
+基于 `STM32L552 Cortex-M33 TrustZone-M` 与 `FreeRTOS` 设计并实现安全 OTA 升级系统，完成 `Secure/Non-Secure` 隔离、`ECDSA-P256` 固件验签、`A/B 双槽无损升级`、`防回滚` 与 `首启失败自动回退`。
+
+---
+
+## 22. 面试讲述主线
+
+推荐按以下顺序讲项目：
+
+1. 普通 OTA 的问题：
+   - 未授权固件风险
+   - 单槽覆盖升级掉电变砖
+   - 升级失败难回退
+
+2. 我的总体方案：
+   - Secure / Non-Secure 双世界隔离
+   - NS 负责收包与业务运行
+   - Secure 负责验签与升级决策
+
+3. 核心机制：
+   - ECDSA 验签
+   - 防回滚
+   - A/B 双槽
+   - 首启确认
+   - 自动回滚
+
+4. RTOS 价值：
+   - OTA 期间业务任务持续运行
+   - 多任务协同处理下载、写槽、日志和健康监控
+
+5. 工程价值：
+   - 更接近真实工业嵌入式安全升级系统
+   - 不是普通课程实验或单纯 RTOS Demo
+
+---
+
+## 23. 当前项目状态
+
+当前阶段属于：
+
+**架构与设计冻结阶段**
+
+已明确：
+- 平台
+- 目标
+- 架构
+- 分区
+- 状态机
+- 任务划分
+- 接口方向
+
+下一步应进入：
+
+**公共头文件与最小代码骨架生成阶段**
+```
+
+---
